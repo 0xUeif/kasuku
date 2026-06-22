@@ -36,16 +36,16 @@ var origTermios syscall.Termios
 // 4. Check if `n == 0` (no bytes read). If so, return `0` and `io.EOF` (End Of File).
 // 5. If successful (n == 1), return the read byte (which is at index `buf[0]`) and `nil` for the error.
 func readKey() (byte, error) {
-	buf := make([]byte, 1)
-	n, err := os.Stdin.Read(buf)
-	if err != nil {
-		return 0, err
-	}
-	if n == 0 {
-		return 0, io.EOF
-	}
-	return buf[0], nil
-}
+        buf := make([]byte, 1)
+        n, err := os.Stdin.Read(buf)
+        if err != nil {
+         return 0, err
+        }
+        if n == 0 {
+         return 0, io.EOF
+        }
+        return buf[0], nil
+    }
 
 // enableRawMode saves the current terminal state and puts the terminal into "raw mode".
 //
@@ -101,8 +101,8 @@ func enableRawMode() error {
   raw.Oflag = raw.Oflag &^ syscall.OPOST
   raw.Cflag = raw.Cflag | syscall.CS8
   raw.Lflag = raw.Lflag &^ (syscall.ECHO | syscall.ICANON | syscall.IEXTEN | syscall.ISIG)
-  raw.Cc[syscall.VMIN] = 0
-  raw.Cc[syscall.VTIME] = 1
+  raw.Cc[syscall.VMIN] = 1 // Wait for at least 1 byte of input before returning from read.
+  raw.Cc[syscall.VTIME] = 0 // No timeout; wait indefinitely for input.
 
   _, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&raw)))
   if err != 0 {
