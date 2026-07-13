@@ -17,6 +17,32 @@ func ctrlKey(k byte) byte {
 	return k & 0x1f
 }
 
+type winsize struct {
+	ws_row    uint16
+	ws_col    uint16
+	ws_xpixel uint16
+	ws_ypixel uint16
+}
+
+// getWindowSize queries the terminal size (rows and columns) using the ioctl system call.
+// `syscall.TIOCGWINSZ` (Terminal I/O Control Get Window Size), request code for window size
+//   - `syscall.SYS_IOCTL` (to invoke the ioctl syscall)
+//   - `uintptr(syscall.Stdout)` (representing the standard output file descriptor)
+//   - `uintptr(syscall.TIOCGWINSZ)` (the command to get terminal window size)
+//   - `uintptr(unsafe.Pointer(&ws))` (the memory address where the OS will write the size)
+
+func getWindowSize() (int, int, error) {
+	ws := winsize{}
+	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(syscall.Stdout), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if err != 0 {
+		return 0, 0, err
+	} else if ws.ws_col == 0 {
+		return 0, 0, fmt.Errorf("invalid terminal width")
+	}
+	return int(ws.ws_col), int(ws.ws_row), nil
+
+}
+
 // readKey reads a single byte from the standard input (os.Stdin).
 func readKey() (byte, error) {
 	buf := make([]byte, 1)
@@ -56,7 +82,6 @@ func enableRawMode() error {
 
 // disableRawMode restores the terminal back to its original "cooked" state.
 func disableRawMode() error {
-	// panic("TODO: implement disableRawMode")
 	fd := int(os.Stdin.Fd())
 	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&origTermios)))
 	if err != 0 {
@@ -78,6 +103,25 @@ func clearScreen() error {
 	return nil
 }
 
+// drawRows prints a column of tildes (~) at the left margin, representing empty lines.
+
+func drawRows(rows int) error {
+	for y := range rows {
+		if y == rows-1 {
+			_, err := os.Stdout.Write([]byte("~"))
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err := os.Stdout.Write([]byte("~\r\n"))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func main() {
 	err := clearScreen()
 	if err != nil {
@@ -90,6 +134,17 @@ func main() {
 		return
 	}
 	defer disableRawMode()
+
+	_, rw, err := getWindowSize()
+	if err != nil {
+		fmt.Println("Error getting window size:", err)
+		return
+	}
+
+	if err = drawRows(rw); err != nil {
+		fmt.Println("Error drawing rows:", err)
+		return
+	}
 
 	for {
 		c, err := readKey()
