@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -13,10 +14,16 @@ import (
 // We need this so we can restore the terminal to its normal state when our program exits.
 var origTermios syscall.Termios
 
+type editorRow struct {
+	size  int
+	chars string
+}
+
 type editorConfig struct {
 	cx, cy     int
 	screenRows int
 	screenCols int
+	rows       []editorRow
 }
 
 var E editorConfig
@@ -167,7 +174,7 @@ func clearScreen() error {
 	return nil
 }
 
-// refreshScreen clears the screen, draws the tildes, and repositions the cursor.
+// refreshScreen clears the screen, draws the rows, and repositions the cursor.
 func refreshScreen() error {
 	var buf bytes.Buffer
 	// Hide the cursor
@@ -175,14 +182,8 @@ func refreshScreen() error {
 	// Reset cursor to top-left
 	buf.WriteString("\x1b[H")
 
-	// Draw tildes for each row
-	for y := 0; y < E.screenRows; y++ {
-		buf.WriteString("~")
-		buf.WriteString("\x1b[K") // Clear the rest of the line
-		if y < E.screenRows-1 {
-			buf.WriteString("\r\n") // Move to the next line
-		}
-	}
+	// Draw rows (either file contents or tildes)
+	editorDrawRows(&buf)
 
 	// Position the cursor at the user's current coordinates
 	fmt.Fprintf(&buf, "\x1b[%d;%dH", E.cy+1, E.cx+1) // ANSI escape sequences are 1-based
@@ -217,22 +218,74 @@ func moveCursor(key rune) {
 	}
 }
 
-// drawRows prints a column of tildes (~) at the left margin, representing empty lines.
-func drawRows(rows int) error {
-	for y := range rows {
-		if y == rows-1 {
-			_, err := os.Stdout.Write([]byte("~"))
-			if err != nil {
-				return err
-			}
-		} else {
-			_, err := os.Stdout.Write([]byte("~\r\n"))
-			if err != nil {
-				return err
-			}
+// editorOpen opens a file, reads its contents line-by-line, and appends them to the editor rows.
+//
+// ELI5 (Explain Like I'm 5):
+// A file is like a notebook stored on your computer's hard drive. To read it, our program asks the operating
+// system for a "file descriptor"—a temporary ticket that lets us look inside. We use a "scanner" to scan through 
+// the file line-by-line. If we forget to close the file when we are done, the computer keeps that ticket active,
+// which eventually wastes resources. That's why we use "defer" to close it automatically.
+//
+// Go vs Python / Go vs C Differences:
+// 1. In Python, you open files using `with open(filename) as f:`, which closes the file automatically. 
+//    In Go, we do this using the `defer` keyword (e.g. `defer file.Close()`) right after successfully opening the file. 
+//    It ensures the file is closed the moment `editorOpen` returns.
+// 2. Go handles line reading efficiently using `bufio.NewScanner`.
+//
+// Explicit Implementation Steps:
+// 1. Call `os.Open(filename)`. If it returns an error, return that error.
+// 2. Immediately call `defer file.Close()` to ensure the file gets cleaned up.
+// 3. Create a scanner: `scanner := bufio.NewScanner(file)`.
+// 4. Loop while `scanner.Scan()` returns true:
+//    - Get the line string: `line := scanner.Text()`.
+//    - Create an `editorRow` instance with `size: len(line)` and `chars: line`.
+//    - Append the new row to the global slice: `E.rows = append(E.rows, row)`.
+// 5. After the loop, check if `scanner.Err()` returned any error. If it did, return that error.
+// 6. Return `nil` to signal success.
+func editorOpen(filename string) error {
+	//panic("TODO: implement editorOpen")
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		row := editorRow{
+			size:  len(line),
+			chars: line,
 		}
+		E.rows = append(E.rows, row)
+
+
+	}
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 	return nil
+}
+
+// editorDrawRows draws the file contents or tildes to the screen buffer.
+func editorDrawRows(buf *bytes.Buffer) {
+	for y := 0; y < E.screenRows; y++ {
+		if y < len(E.rows) {
+			line := E.rows[y].chars
+			if len(line) > E.screenCols {
+				line = line[:E.screenCols]
+			}
+			buf.WriteString(line)
+		} else {
+			buf.WriteString("~")
+		}
+		buf.WriteString("\x1b[K") // Clear to end of line
+		if y < E.screenRows-1 {
+			buf.WriteString("\r\n")
+		}
+	}
 }
 
 func main() {
@@ -245,6 +298,14 @@ func main() {
 	defer disableRawMode()
 
 	initEditor()
+
+	if len(os.Args) > 1 {
+		err := editorOpen(os.Args[1])
+		if err != nil {
+			fmt.Println("Error opening file:", err)
+			return
+		}
+	}
 
 	for {
 		refreshScreen()
