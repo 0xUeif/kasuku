@@ -46,7 +46,7 @@ func initEditor() {
 }
 
 // ctrlKey converts a normal letter key into its control key counterpart by masking bits.
-func ctrlKey(k byte) byte {
+func ctrlKey(k rune) rune {
 	return k & 0x1f
 }
 
@@ -81,54 +81,94 @@ const (
 	arrowRight
 	arrowUp
 	arrowDown
+	pageUp
+	pageDown
+	homeKey
+	endKey
+	delKey
 )
 
-
-func readKey() (rune, error) {
-    buf := make([]byte, 1)
-    //wait for buffer to be filled with 1 byte
-    for {
-        n, err := os.Stdin.Read(buf)
-        if err != nil && err != io.EOF {
-            return 0, err
-        }
-        if n == 1 {
-            break // process byte now
-        }
-    }
-
-    if buf[0] == '\x1b' {
-        seq := make([]byte, 2)
-        
-        n, err := os.Stdin.Read(seq[:1])
-        if n != 1 || err != nil {
-            return '\x1b', nil //escape sequence not complete, return ESC
+func readByte() (byte, error) {
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				continue // No data yet, keep waiting
+			}
+			return 0, err
 		}
-        
-        n, err = os.Stdin.Read(seq[1:])
-        if n != 1 || err != nil {
-            return '\x1b', nil 
-        }
-        //move cursor based on the escape sequence
-        if seq[0] == '[' {
-            switch seq[1] {
-            case 'A':
-                return arrowUp, nil
-            case 'B':
-                return arrowDown, nil
-            case 'C':
-                return arrowRight, nil
-            case 'D':
-                return arrowLeft, nil
-            }
-        }
-        
-        // If it was an escape sequence we don't recognize, just return ESC
-        return '\x1b', nil
-    } 
+		if n == 0 {
+			continue // No data yet, keep waiting
+		}
+		return buf[0], nil
+	}
+}
 
-    // Not an escape sequence, just return the standard character
-    return rune(buf[0]), nil
+// readKey reads a single keypress, now parsing Page Up/Down, Home, End, and Delete.
+func readKey() (rune, error) {
+	b, err := readByte()
+	if err != nil {
+		return 0, err
+	}
+	if b != '\x1b' {
+		return rune(b), nil
+	}
+	seq1, err := readByte()
+	if err != nil {
+		return 0, err
+	}
+	seq2, err := readByte()
+	if err != nil {
+		return 0, err
+	}
+
+	switch seq1 {
+	case '[':
+		if seq2 >= '0' && seq2 <= '9' {
+			tilde, err := readByte()
+			if err != nil || tilde != '~' {
+				return 0, err
+			}
+			switch seq2 {
+			case '1', '7':
+				return homeKey, nil
+			case '3':
+				return delKey, nil
+			case '4', '8':
+				return endKey, nil
+			case '5':
+				return pageUp, nil
+			case '6':
+				return pageDown, nil
+			}
+
+		} else {
+			switch seq2 {
+			case 'A':
+				return arrowUp, nil
+			case 'B':
+				return arrowDown, nil
+			case 'C':
+				return arrowRight, nil
+			case 'D':
+				return arrowLeft, nil
+			case 'H':
+				return homeKey, nil
+			case 'F':
+				return endKey, nil
+			}
+		}
+	case 'O':
+		switch seq2 {
+		case 'H':
+			return homeKey, nil
+		case 'F':
+			return endKey, nil
+		}
+	}
+
+	return '\x1b', nil // Unrecognized escape sequence, default to returning ESC
 }
 
 // enableRawMode saves the current terminal state and puts the terminal into "raw mode".
@@ -182,14 +222,14 @@ func clearScreen() error {
 func editorScroll() {
 	if E.cy < E.rowoff {
 		E.rowoff = E.cy
-	} 
-	if E.cy >= E.rowoff + E.screenRows {
-		E.rowoff = E.cy - E.screenRows + 1 
+	}
+	if E.cy >= E.rowoff+E.screenRows {
+		E.rowoff = E.cy - E.screenRows + 1
 	}
 	if E.cx < E.coloff {
 		E.coloff = E.cx
 	}
-	if E.cx >= E.coloff + E.screenCols {
+	if E.cx >= E.coloff+E.screenCols {
 		E.coloff = E.cx - E.screenCols + 1
 	}
 }
@@ -218,21 +258,26 @@ func refreshScreen() error {
 	return err
 }
 
-// moveCursor updates E.cx and E.cy to move the cursor based on the arrow key input.
+// moveCursor updates E.cx and E.cy to move the cursor based on the arrow key input, supporting line wrapping.
 func moveCursor(key rune) {
-	xlen := 0
-	if E.cy < len(E.rows) {
-		xlen = len(E.rows[E.cy].chars)
-	}
-
 	switch key {
 	case arrowLeft:
 		if E.cx > 0 {
 			E.cx--
+		} else if E.cy > 0 {
+			E.cy--
+			E.cx = len(E.rows[E.cy].chars)
+			
 		}
 	case arrowRight:
-		if E.cy < len(E.rows) && E.cx < xlen {
-			E.cx++
+		if E.cy < len(E.rows) {
+			xlen := len(E.rows[E.cy].chars)
+			if E.cx < xlen {
+				E.cx++
+			} else if E.cx == xlen {
+				E.cy++
+				E.cx = 0
+			}
 		}
 	case arrowUp:
 		if E.cy > 0 {
@@ -244,15 +289,44 @@ func moveCursor(key rune) {
 		}
 	}
 
-	newXlen := 0
+	var rowLen int
 	if E.cy < len(E.rows) {
-		newXlen = len(E.rows[E.cy].chars)
+		rowLen = len(E.rows[E.cy].chars)
+	} else {
+		rowLen = 0
 	}
-	if E.cx > newXlen {
-		E.cx = newXlen
+	if E.cx > rowLen {
+		E.cx = rowLen
 	}
+}
 
-	
+// editorProcessKeypress processes a keypress received from the keyboard.
+// 3. Return `true` to continue the editor loop.
+func editorProcessKeypress(key rune) bool {
+	switch key {
+	case ctrlKey('q'):
+		return false
+	case homeKey:
+		E.cx = 0
+	case endKey:
+		if E.cy < len(E.rows) {
+			E.cx = len(E.rows[E.cy].chars)
+		}
+	case pageUp, pageDown:
+		var dir rune
+		if key == pageUp {
+			dir = arrowUp
+		} else {
+			dir = arrowDown
+		}
+		for i := 0; i < E.screenRows; i++ {
+			moveCursor(dir)
+		}
+	case arrowLeft, arrowRight, arrowUp, arrowDown:
+		moveCursor(key)
+	}
+	return true
+
 }
 
 // editorOpen opens a file, reads its contents line-by-line, and appends them to the editor rows.
@@ -273,7 +347,6 @@ func editorOpen(filename string) error {
 			chars: line,
 		}
 		E.rows = append(E.rows, row)
-
 
 	}
 	if err := scanner.Err(); err != nil {
@@ -333,10 +406,9 @@ func main() {
 			fmt.Println("Error reading key:", err)
 			break
 		}
-		if c == rune(ctrlKey('q')) { // Exit on Ctrl-Q
+		if !editorProcessKeypress(c) { // If editorProcessKeypress returns false, exit the loop
 			break
 		}
-		moveCursor(c)
 	}
 	err = clearScreen()
 	if err != nil {
