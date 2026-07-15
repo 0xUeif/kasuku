@@ -21,6 +21,8 @@ type editorRow struct {
 
 type editorConfig struct {
 	cx, cy     int
+	rowoff     int
+	coloff     int
 	screenRows int
 	screenCols int
 	rows       []editorRow
@@ -32,6 +34,8 @@ var E editorConfig
 func initEditor() {
 	E.cx = 0
 	E.cy = 0
+	E.rowoff = 0
+	E.coloff = 0
 	cols, rows, err := getWindowSize()
 	if err != nil {
 		fmt.Println("Error getting window size:", err)
@@ -174,8 +178,26 @@ func clearScreen() error {
 	return nil
 }
 
+// editorScroll calculates the vertical and horizontal scrolling offsets based on the cursor position.
+func editorScroll() {
+	if E.cy < E.rowoff {
+		E.rowoff = E.cy
+	} 
+	if E.cy >= E.rowoff + E.screenRows {
+		E.rowoff = E.cy - E.screenRows + 1 
+	}
+	if E.cx < E.coloff {
+		E.coloff = E.cx
+	}
+	if E.cx >= E.coloff + E.screenCols {
+		E.coloff = E.cx - E.screenCols + 1
+	}
+}
+
 // refreshScreen clears the screen, draws the rows, and repositions the cursor.
 func refreshScreen() error {
+	editorScroll()
+
 	var buf bytes.Buffer
 	// Hide the cursor
 	buf.WriteString("\x1b[?25l")
@@ -185,8 +207,8 @@ func refreshScreen() error {
 	// Draw rows (either file contents or tildes)
 	editorDrawRows(&buf)
 
-	// Position the cursor at the user's current coordinates
-	fmt.Fprintf(&buf, "\x1b[%d;%dH", E.cy+1, E.cx+1) // ANSI escape sequences are 1-based
+	// Position the cursor at the user's current coordinates relative to the scroll offsets
+	fmt.Fprintf(&buf, "\x1b[%d;%dH", (E.cy-E.rowoff)+1, (E.cx-E.coloff)+1) // ANSI escape sequences are 1-based
 
 	// Show the cursor again
 	buf.WriteString("\x1b[?25h")
@@ -198,13 +220,18 @@ func refreshScreen() error {
 
 // moveCursor updates E.cx and E.cy to move the cursor based on the arrow key input.
 func moveCursor(key rune) {
+	xlen := 0
+	if E.cy < len(E.rows) {
+		xlen = len(E.rows[E.cy].chars)
+	}
+
 	switch key {
 	case arrowLeft:
 		if E.cx > 0 {
 			E.cx--
 		}
 	case arrowRight:
-		if E.cx < E.screenCols-1 {
+		if E.cy < len(E.rows) && E.cx < xlen {
 			E.cx++
 		}
 	case arrowUp:
@@ -212,38 +239,24 @@ func moveCursor(key rune) {
 			E.cy--
 		}
 	case arrowDown:
-		if E.cy < E.screenRows-1 {
+		if E.cy < len(E.rows) {
 			E.cy++
 		}
 	}
+
+	newXlen := 0
+	if E.cy < len(E.rows) {
+		newXlen = len(E.rows[E.cy].chars)
+	}
+	if E.cx > newXlen {
+		E.cx = newXlen
+	}
+
+	
 }
 
 // editorOpen opens a file, reads its contents line-by-line, and appends them to the editor rows.
-//
-// ELI5 (Explain Like I'm 5):
-// A file is like a notebook stored on your computer's hard drive. To read it, our program asks the operating
-// system for a "file descriptor"—a temporary ticket that lets us look inside. We use a "scanner" to scan through 
-// the file line-by-line. If we forget to close the file when we are done, the computer keeps that ticket active,
-// which eventually wastes resources. That's why we use "defer" to close it automatically.
-//
-// Go vs Python / Go vs C Differences:
-// 1. In Python, you open files using `with open(filename) as f:`, which closes the file automatically. 
-//    In Go, we do this using the `defer` keyword (e.g. `defer file.Close()`) right after successfully opening the file. 
-//    It ensures the file is closed the moment `editorOpen` returns.
-// 2. Go handles line reading efficiently using `bufio.NewScanner`.
-//
-// Explicit Implementation Steps:
-// 1. Call `os.Open(filename)`. If it returns an error, return that error.
-// 2. Immediately call `defer file.Close()` to ensure the file gets cleaned up.
-// 3. Create a scanner: `scanner := bufio.NewScanner(file)`.
-// 4. Loop while `scanner.Scan()` returns true:
-//    - Get the line string: `line := scanner.Text()`.
-//    - Create an `editorRow` instance with `size: len(line)` and `chars: line`.
-//    - Append the new row to the global slice: `E.rows = append(E.rows, row)`.
-// 5. After the loop, check if `scanner.Err()` returned any error. If it did, return that error.
-// 6. Return `nil` to signal success.
 func editorOpen(filename string) error {
-	//panic("TODO: implement editorOpen")
 	file, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -269,11 +282,17 @@ func editorOpen(filename string) error {
 	return nil
 }
 
-// editorDrawRows draws the file contents or tildes to the screen buffer.
+// editorDrawRows draws the file contents or tildes to the screen buffer, taking scroll offsets into account.
 func editorDrawRows(buf *bytes.Buffer) {
 	for y := 0; y < E.screenRows; y++ {
-		if y < len(E.rows) {
-			line := E.rows[y].chars
+		fileRow := y + E.rowoff
+		if fileRow < len(E.rows) {
+			line := E.rows[fileRow].chars
+			if E.coloff < len(line) {
+				line = line[E.coloff:]
+			} else {
+				line = ""
+			}
 			if len(line) > E.screenCols {
 				line = line[:E.screenCols]
 			}
