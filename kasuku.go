@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -17,6 +18,7 @@ var origTermios syscall.Termios
 type editorRow struct {
 	size  int
 	chars string
+	render string
 }
 
 type editorConfig struct {
@@ -378,6 +380,53 @@ func editorDrawRows(buf *bytes.Buffer) {
 			buf.WriteString("\r\n")
 		}
 	}
+}
+
+const tabWidth = 4
+
+func editorUpdateRow(row *editorRow) {
+	var builder strings.Builder
+
+	builder.Grow(len(row.chars))
+	
+	idx := 0
+	for _, c := range row.chars {
+		if c == '\t' {
+			builder.WriteByte(' ')
+			idx++
+			for idx%tabWidth != 0 {
+				builder.WriteByte(' ')
+				idx++
+			}
+		} else {
+			builder.WriteRune(c)
+			idx++
+		}
+	}
+	row.render = builder.String()
+	row.size = len(row.render)
+}
+
+func editorDrawStatusBar(buf *bytes.Buffer) {
+	buf.WriteString("\x1b[7m") // Switch to inverted colors for the status bar
+
+	status := fmt.Sprintf("%.20s - kasuko.go - %d lines", "No File",  len(E.rows))
+	rstatus := fmt.Sprintf("%d/%d", E.cy+1, len(E.rows))
+
+	if len(status) > E.screenCols {
+		status = status[:E.screenCols]
+	}
+
+	buf.WriteString(status)
+
+	for len(status)+len(rstatus) < E.screenCols {
+		buf.WriteByte(' ')
+		status += " "
+	}
+
+	buf.WriteString(rstatus)
+	buf.WriteString("\x1b[m") // Switch back to normal colors
+	buf.WriteString("\r\n")
 }
 
 func main() {
