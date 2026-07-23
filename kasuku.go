@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -28,6 +29,9 @@ type editorConfig struct {
 	screenRows int
 	screenCols int
 	rows       []editorRow
+	filename   string
+	statusMsg string
+	statusMsgTime time.Time
 }
 
 var E editorConfig
@@ -44,7 +48,7 @@ func initEditor() {
 		os.Exit(1)
 	}
 	E.screenCols = cols
-	E.screenRows = rows
+	E.screenRows = rows -2
 }
 
 // ctrlKey converts a normal letter key into its control key counterpart by masking bits.
@@ -248,6 +252,8 @@ func refreshScreen() error {
 
 	// Draw rows (either file contents or tildes)
 	editorDrawRows(&buf)
+	editorDrawStatusBar(&buf)
+	editorDrawMessageBar(&buf)
 
 	// Position the cursor at the user's current coordinates relative to the scroll offsets
 	fmt.Fprintf(&buf, "\x1b[%d;%dH", (E.cy-E.rowoff)+1, (E.cx-E.coloff)+1) // ANSI escape sequences are 1-based
@@ -339,16 +345,15 @@ func editorOpen(filename string) error {
 	}
 	defer file.Close()
 
+	E.filename = filename
+
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		row := editorRow{
-			size:  len(line),
-			chars: line,
-		}
-		E.rows = append(E.rows, row)
+		
+		editorAppendRow(line)
 
 	}
 	if err := scanner.Err(); err != nil {
@@ -361,8 +366,10 @@ func editorOpen(filename string) error {
 func editorDrawRows(buf *bytes.Buffer) {
 	for y := 0; y < E.screenRows; y++ {
 		fileRow := y + E.rowoff
+
 		if fileRow < len(E.rows) {
-			line := E.rows[fileRow].chars
+
+			line := E.rows[fileRow].render
 			if E.coloff < len(line) {
 				line = line[E.coloff:]
 			} else {
@@ -376,9 +383,9 @@ func editorDrawRows(buf *bytes.Buffer) {
 			buf.WriteString("~")
 		}
 		buf.WriteString("\x1b[K") // Clear to end of line
-		if y < E.screenRows-1 {
-			buf.WriteString("\r\n")
-		}
+	
+		buf.WriteString("\r\n")
+		
 	}
 }
 
@@ -407,10 +414,24 @@ func editorUpdateRow(row *editorRow) {
 	row.size = len(row.render)
 }
 
-func editorDrawStatusBar(buf *bytes.Buffer) {
-	buf.WriteString("\x1b[7m") // Switch to inverted colors for the status bar
+func editorAppendRow(s string) {
+	row := editorRow{
+		size:  len(s),
+		chars: s,
+	}
+	editorUpdateRow(&row)
+	E.rows = append(E.rows, row)
+}
 
-	status := fmt.Sprintf("%.20s - kasuko.go - %d lines", "No File",  len(E.rows))
+func editorDrawStatusBar(buf *bytes.Buffer) {
+	buf.WriteString("\x1b[7m") // Switch to inverted colors for the status bar\
+
+	filename := E.filename
+	if filename == "" {
+		filename = "No File"
+	}
+
+	status := fmt.Sprintf("%.20s - kasuko.go - %d lines", filename, len(E.rows))
 	rstatus := fmt.Sprintf("%d/%d", E.cy+1, len(E.rows))
 
 	if len(status) > E.screenCols {
@@ -429,6 +450,18 @@ func editorDrawStatusBar(buf *bytes.Buffer) {
 	buf.WriteString("\r\n")
 }
 
+func editorDrawMessageBar(buf *bytes.Buffer) {	
+	buf.WriteString("\x1b[K") // Clear the message bar line
+	msgLen := len(E.statusMsg)
+	if msgLen > E.screenCols {
+		msgLen = E.screenCols
+	}
+	if msgLen > 0 && time.Since(E.statusMsgTime).Seconds() < 5 {
+		buf.WriteString(E.statusMsg[:msgLen])
+	}
+
+}
+
 func main() {
 
 	err := enableRawMode()
@@ -437,6 +470,9 @@ func main() {
 		return
 	}
 	defer disableRawMode()
+
+	E.statusMsg = "HELP: Ctrl-Q = quit"
+    E.statusMsgTime = time.Now()
 
 	initEditor()
 
