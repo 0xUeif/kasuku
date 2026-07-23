@@ -127,7 +127,7 @@ func readKey() (rune, error) {
 	case '[':
 		if seq2 >= '0' && seq2 <= '9' {
 			tilde, err := readByte()
-			if err != nil || tilde != '~' {
+			if err != nil || tilde != '~' { // Expecting a tilde after the number for certain keys
 				return 0, err
 			}
 			switch seq2 {
@@ -162,7 +162,7 @@ func readKey() (rune, error) {
 	case 'O':
 		switch seq2 {
 		case 'H':
-			return homeKey, nil
+			return homeKey, nil 
 		case 'F':
 			return endKey, nil
 		}
@@ -178,13 +178,13 @@ func enableRawMode() error {
 	if err != 0 {
 		return err
 	}
-
+    
 	raw := origTermios
 	raw.Iflag = raw.Iflag &^ (syscall.BRKINT | syscall.ICRNL | syscall.INPCK | syscall.ISTRIP | syscall.IXON)
 	raw.Oflag = raw.Oflag &^ syscall.OPOST
 	raw.Cflag = raw.Cflag | syscall.CS8
 	raw.Lflag = raw.Lflag &^ (syscall.ECHO | syscall.ICANON | syscall.IEXTEN | syscall.ISIG)
-	raw.Cc[syscall.VMIN] = 0
+	raw.Cc[syscall.VMIN] = 0 // return as soon as there is input
 	raw.Cc[syscall.VTIME] = 1 // wait for 100ms
 
 	_, _, err = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&raw)))
@@ -220,16 +220,16 @@ func clearScreen() error {
 
 // editorScroll calculates the vertical and horizontal scrolling offsets based on the cursor position.
 func editorScroll() {
-	if E.cy < E.rowoff {
+	if E.cy < E.rowoff { // If the cursor is above the visible window, scroll up
 		E.rowoff = E.cy
 	}
-	if E.cy >= E.rowoff+E.screenRows {
+	if E.cy >= E.rowoff+E.screenRows { // If the cursor is below the visible window, scroll down
 		E.rowoff = E.cy - E.screenRows + 1
 	}
-	if E.cx < E.coloff {
+	if E.cx < E.coloff { // If the cursor is to the left of the visible window, scroll left
 		E.coloff = E.cx
 	}
-	if E.cx >= E.coloff+E.screenCols {
+	if E.cx >= E.coloff+E.screenCols { // If the cursor is to the right of the visible window, scroll right
 		E.coloff = E.cx - E.screenCols + 1
 	}
 }
@@ -264,13 +264,13 @@ func moveCursor(key rune) {
 	case arrowLeft:
 		if E.cx > 0 {
 			E.cx--
-		} else if E.cy > 0 {
+		} else if E.cy > 0 { 
 			E.cy--
 			E.cx = len(E.rows[E.cy].chars)
 			
 		}
 	case arrowRight:
-		if E.cy < len(E.rows) {
+		if E.cy < len(E.rows) { 
 			xlen := len(E.rows[E.cy].chars)
 			if E.cx < xlen {
 				E.cx++
